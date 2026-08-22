@@ -1,6 +1,6 @@
 import streamlit as st
 from deepface import DeepFace
-from PIL import Image
+from PIL import Image, ImageOps
 import tempfile
 from pathlib import Path
 
@@ -61,17 +61,56 @@ st.markdown(
         font-weight: 700;
     }
 
-    .metric-box {
-        padding: 15px;
-        border-radius: 12px;
-        background-color: #f5f5f5;
-        text-align: center;
-    }
-
     </style>
     """,
     unsafe_allow_html=True
 )
+
+
+# =========================================================
+# Sidebar
+# =========================================================
+
+with st.sidebar:
+
+    st.header("📷 Upload Images")
+
+    st.write(
+        "Upload two images to compare the faces."
+    )
+
+    image1_file = st.file_uploader(
+        "First Image",
+        type=["jpg", "jpeg", "png"],
+        key="image1"
+    )
+
+    image2_file = st.file_uploader(
+        "Second Image",
+        type=["jpg", "jpeg", "png"],
+        key="image2"
+    )
+
+    st.divider()
+
+    st.header("⚙️ Settings")
+
+    threshold_multiplier = st.slider(
+        "Threshold Multiplier",
+        min_value=0.50,
+        max_value=2.00,
+        value=1.20,
+        step=0.05,
+        help=(
+            "Higher values make the verification more lenient. "
+            "Lower values make it stricter."
+        )
+    )
+
+    st.caption(
+        "💡 Increase this value if two images of the same "
+        "person are incorrectly classified as different."
+    )
 
 
 # =========================================================
@@ -92,52 +131,77 @@ st.markdown(
 
 
 # =========================================================
-# Upload Section
+# Function: Prepare Image
 # =========================================================
 
-col1, col2 = st.columns(2, gap="large")
+def prepare_image(image, size=(450, 450)):
 
+    image = image.convert("RGB")
 
-with col1:
-
-    st.subheader("📷 First Image")
-
-    image1_file = st.file_uploader(
-        "Upload the first image",
-        type=["jpg", "jpeg", "png"],
-        key="image1"
+    # Keep aspect ratio while creating the same canvas size
+    image = ImageOps.contain(
+        image,
+        size
     )
 
-    if image1_file:
+    # Create a fixed-size canvas
+    canvas = Image.new(
+        "RGB",
+        size,
+        "white"
+    )
 
-        image1 = Image.open(image1_file)
+    # Center the image
+    x = (size[0] - image.width) // 2
+    y = (size[1] - image.height) // 2
+
+    canvas.paste(
+        image,
+        (x, y)
+    )
+
+    return canvas
+
+
+# =========================================================
+# Display Uploaded Images
+# =========================================================
+
+if image1_file is not None and image2_file is not None:
+
+    image1 = Image.open(image1_file)
+    image2 = Image.open(image2_file)
+
+    display_image1 = prepare_image(image1)
+    display_image2 = prepare_image(image2)
+
+    col1, col2 = st.columns(2, gap="large")
+
+    with col1:
+
+        st.subheader("📷 First Image")
 
         st.image(
-            image1,
+            display_image1,
             caption="First Image",
-            use_container_width=True
+            width=450
         )
 
+    with col2:
 
-with col2:
-
-    st.subheader("📷 Second Image")
-
-    image2_file = st.file_uploader(
-        "Upload the second image",
-        type=["jpg", "jpeg", "png"],
-        key="image2"
-    )
-
-    if image2_file:
-
-        image2 = Image.open(image2_file)
+        st.subheader("📷 Second Image")
 
         st.image(
-            image2,
+            display_image2,
             caption="Second Image",
-            use_container_width=True
+            width=450
         )
+
+else:
+
+    st.info(
+        "👈 Please upload both images from the sidebar."
+    )
 
 
 # =========================================================
@@ -177,24 +241,30 @@ if compare_button:
             "🧠 DeepFace is analyzing the two faces..."
         ):
 
-            # Temporary directory
-            temp_dir = Path(tempfile.mkdtemp())
+            temp_dir = Path(
+                tempfile.mkdtemp()
+            )
 
-            image1_path = temp_dir / image1_file.name
-            image2_path = temp_dir / image2_file.name
+            image1_path = temp_dir / "image1.jpg"
+            image2_path = temp_dir / "image2.jpg"
 
-            # Save uploaded images
-            with open(image1_path, "wb") as f:
-                f.write(image1_file.getbuffer())
+            # Save first image
+            image1.save(
+                image1_path,
+                format="JPEG"
+            )
 
-            with open(image2_path, "wb") as f:
-                f.write(image2_file.getbuffer())
+            # Save second image
+            image2.save(
+                image2_path,
+                format="JPEG"
+            )
 
             try:
 
-                # -----------------------------------------
+                # =================================================
                 # DeepFace Verification
-                # -----------------------------------------
+                # =================================================
 
                 result = DeepFace.verify(
                     img1_path=str(image1_path),
@@ -202,25 +272,39 @@ if compare_button:
                     detector_backend="retinaface"
                 )
 
-                verified = result["verified"]
+                # Original DeepFace values
                 distance = result["distance"]
-                threshold = result["threshold"]
+                original_threshold = result["threshold"]
 
-                # -----------------------------------------
+                # =================================================
+                # Custom Threshold
+                # =================================================
+
+                custom_threshold = (
+                    original_threshold *
+                    threshold_multiplier
+                )
+
+                # Our final decision
+                verified = (
+                    distance <= custom_threshold
+                )
+
+                # =================================================
                 # Result
-                # -----------------------------------------
+                # =================================================
 
                 if verified:
 
                     st.markdown(
-                        """
+                        f"""
                         <div class="result-box same-person">
                             <div class="result-title">
                                 ✅ Same Person
                             </div>
                             <p>
-                                DeepFace found the two faces similar enough
-                                to be considered the same person.
+                                The two faces are similar enough
+                                according to the selected threshold.
                             </p>
                         </div>
                         """,
@@ -230,30 +314,32 @@ if compare_button:
                 else:
 
                     st.markdown(
-                        """
+                        f"""
                         <div class="result-box different-person">
                             <div class="result-title">
                                 ❌ Different People
                             </div>
                             <p>
-                                DeepFace found the two faces different.
+                                The distance between the two faces
+                                is greater than the selected threshold.
                             </p>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
 
-                # -----------------------------------------
+                # =================================================
                 # Metrics
-                # -----------------------------------------
+                # =================================================
 
-                metric1, metric2, metric3 = st.columns(3)
+                metric1, metric2, metric3, metric4 = st.columns(4)
 
                 with metric1:
 
                     st.metric(
                         "Verification",
-                        "Same Person" if verified
+                        "Same Person"
+                        if verified
                         else "Different"
                     )
 
@@ -267,33 +353,77 @@ if compare_button:
                 with metric3:
 
                     st.metric(
-                        "Threshold",
-                        f"{threshold:.4f}"
+                        "Original Threshold",
+                        f"{original_threshold:.4f}"
                     )
 
-                # -----------------------------------------
-                # Explanation
-                # -----------------------------------------
+                with metric4:
 
-                with st.expander("ℹ️ How does this work?"):
+                    st.metric(
+                        "Custom Threshold",
+                        f"{custom_threshold:.4f}"
+                    )
+
+                # =================================================
+                # Threshold Information
+                # =================================================
+
+                st.info(
+                    f"""
+                    **Threshold Multiplier:** `{threshold_multiplier:.2f}`
+
+                    Original threshold:
+                    `{original_threshold:.4f}`
+
+                    Custom threshold:
+                    `{custom_threshold:.4f}`
+
+                    Distance:
+                    `{distance:.4f}`
+                    """
+                )
+
+                # =================================================
+                # Explanation
+                # =================================================
+
+                with st.expander(
+                    "ℹ️ How does Face Verification work?"
+                ):
 
                     st.write(
                         """
-                        DeepFace converts the detected faces into numerical
-                        representations called embeddings and compares them.
+                        DeepFace detects the faces using RetinaFace
+                        and converts them into numerical embeddings.
 
-                        A smaller distance means the two embeddings are more
-                        similar.
+                        The embeddings are then compared using a
+                        distance metric.
 
-                        DeepFace compares the calculated distance with the
-                        model's threshold. If the distance satisfies the
-                        threshold, the two images are classified as belonging
-                        to the same person.
+                        A smaller distance means the two faces are
+                        more similar.
+
+                        The final decision is based on:
+
+                            Distance <= Threshold
+
+                        If this condition is satisfied, the images
+                        are classified as belonging to the same person.
+
+                        The Threshold Multiplier allows you to make
+                        the verification more or less strict.
+
+                        A higher multiplier makes the system more
+                        lenient, while a lower multiplier makes it
+                        stricter.
                         """
                     )
 
             except Exception as e:
 
                 st.error(
-                    f"❌ An error occurred while processing the images:\n\n{e}"
+                    f"""
+                    ❌ An error occurred while processing the images:
+
+                    {e}
+                    """
                 )
